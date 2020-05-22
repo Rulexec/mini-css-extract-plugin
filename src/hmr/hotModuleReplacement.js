@@ -5,8 +5,6 @@
   func-names
 */
 
-const normalizeUrl = require('normalize-url');
-
 const srcByModuleId = Object.create(null);
 
 const noDocument = typeof document === 'undefined';
@@ -32,48 +30,17 @@ function debounce(fn, time) {
 
 function noop() {}
 
-function getCurrentScriptUrl(moduleId) {
+function getCurrentModuleChunks(moduleId) {
   let src = srcByModuleId[moduleId];
 
   if (!src) {
-    if (document.currentScript) {
-      ({ src } = document.currentScript);
-    } else {
-      const scripts = document.getElementsByTagName('script');
-      const lastScriptTag = scripts[scripts.length - 1];
-
-      if (lastScriptTag) {
-        ({ src } = lastScriptTag);
-      }
-    }
+    src = module.miniCssModuleIdToChunkIds[moduleId];
 
     srcByModuleId[moduleId] = src;
   }
 
-  return function(fileMap) {
-    if (!src) {
-      return null;
-    }
-
-    const splitResult = src.split(/([^\\/]+)\.js$/);
-    const filename = splitResult && splitResult[1];
-
-    if (!filename) {
-      return [src.replace('.js', '.css')];
-    }
-
-    if (!fileMap) {
-      return [src.replace('.js', '.css')];
-    }
-
-    return fileMap.split(',').map((mapRule) => {
-      const reg = new RegExp(`${filename}\\.js$`, 'g');
-
-      return normalizeUrl(
-        src.replace(reg, `${mapRule.replace(/{fileName}/g, filename)}.css`),
-        { stripWWW: false }
-      );
-    });
+  return function() {
+    return src;
   };
 }
 
@@ -127,24 +94,16 @@ function updateCss(el, url) {
   }
 }
 
-function getReloadUrl(href, src) {
-  let ret;
+function reloadStyle(chunkIds) {
+  if (!chunkIds) {
+    return false;
+  }
 
-  // eslint-disable-next-line no-param-reassign
-  href = normalizeUrl(href, { stripWWW: false });
+  const selector = chunkIds
+    .map((id) => `link[data-mini-css-chunk-id="${id}"]`)
+    .join(',');
 
-  // eslint-disable-next-line array-callback-return
-  src.some((url) => {
-    if (href.indexOf(src) > -1) {
-      ret = url;
-    }
-  });
-
-  return ret;
-}
-
-function reloadStyle(src) {
-  const elements = document.querySelectorAll('link');
+  const elements = document.querySelectorAll(selector);
   let loaded = false;
 
   forEach.call(elements, (el) => {
@@ -152,21 +111,13 @@ function reloadStyle(src) {
       return;
     }
 
-    const url = getReloadUrl(el.href, src);
-
-    if (!isUrlRequest(url)) {
-      return;
-    }
-
     if (el.visited === true) {
       return;
     }
 
-    if (url) {
-      updateCss(el, url);
+    updateCss(el, el.href);
 
-      loaded = true;
-    }
+    loaded = true;
   });
 
   return loaded;
@@ -202,11 +153,11 @@ module.exports = function(moduleId, options) {
     return noop;
   }
 
-  const getScriptSrc = getCurrentScriptUrl(moduleId);
+  const getModuleChunks = getCurrentModuleChunks(moduleId);
 
   function update() {
-    const src = getScriptSrc(options.filename);
-    const reloaded = reloadStyle(src);
+    const chunkIds = getModuleChunks();
+    const reloaded = reloadStyle(chunkIds);
 
     if (options.locals) {
       console.log('[HMR] Detected local css modules. Reload all css');
@@ -217,7 +168,7 @@ module.exports = function(moduleId, options) {
     }
 
     if (reloaded && !options.reloadAll) {
-      console.log('[HMR] css reload %s', src.join(' '));
+      console.log('[HMR] css reload %s', chunkIds.join(' '));
     } else {
       console.log('[HMR] Reload all css');
 

@@ -237,15 +237,50 @@ class MiniCssExtractPlugin {
           .substring(0, hashDigestLength);
       });
 
+      const moduleIdToChunkFiles = new Map();
+
+      compilation.hooks.afterOptimizeChunkIds.tap(pluginName, (chunks) => {
+        chunks.forEach((chunk) => {
+          const cssModules = chunk
+            .getModules()
+            .filter(
+              (m) =>
+                m.loaders &&
+                m.loaders.some(
+                  (loader) =>
+                    loader.loader.indexOf('mini-css-extract-plugin') >= 0
+                )
+            );
+
+          cssModules.forEach((m) => {
+            let chunkFiles = moduleIdToChunkFiles.get(m.id);
+            if (!chunkFiles) {
+              chunkFiles = new Set();
+              moduleIdToChunkFiles.set(m.id, chunkFiles);
+            }
+
+            chunkFiles.add(chunk.id);
+          });
+        });
+      });
+
       const { mainTemplate } = compilation;
 
       mainTemplate.hooks.localVars.tap(pluginName, (source, chunk) => {
         const chunkMap = this.getCssChunkObject(chunk);
 
         if (Object.keys(chunkMap).length > 0) {
+          const cssChunksMap = {};
+
+          moduleIdToChunkFiles.forEach((filesSet, moduleId) => {
+            cssChunksMap[moduleId] = Array.from(filesSet);
+          });
+
           return Template.asString([
             source,
             '',
+            '// moduleId => [chunkId]',
+            `var miniCssModuleIdToChunkIds = ${JSON.stringify(cssChunksMap)}`,
             '// object to store loaded CSS chunks',
             'var installedCssChunks = {',
             Template.indent(
@@ -257,6 +292,13 @@ class MiniCssExtractPlugin {
 
         return source;
       });
+
+      mainTemplate.hooks.moduleObj.tap(pluginName, (source) =>
+        Template.asString([
+          `${source},`,
+          'miniCssModuleIdToChunkIds: miniCssModuleIdToChunkIds',
+        ])
+      );
 
       mainTemplate.hooks.requireEnsure.tap(
         pluginName,
@@ -350,6 +392,7 @@ class MiniCssExtractPlugin {
                   ]),
                   '}',
                   'var linkTag = document.createElement("link");',
+                  `linkTag.setAttribute("data-mini-css-chunk-id", chunkId);`,
                   'linkTag.rel = "stylesheet";',
                   'linkTag.type = "text/css";',
                   'linkTag.onload = resolve;',
